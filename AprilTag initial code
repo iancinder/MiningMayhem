@@ -1,0 +1,81 @@
+import time
+import ntcore
+
+# 1. Initialize NetworkTables connection
+inst = ntcore.NetworkTableInstance.getDefault()
+inst.startClient4("robot_nav_script")
+inst.setServer("localhost") # Change to Pi's IP if running on a separate coprocessor (currently just running on localhost w/ ethernet to laptop, but for comp this will need to be the pi's ip)
+
+# Access the specific camera's data table. 
+cam_table = inst.getTable("photonvision").getSubTable("Camera_Module_v2")
+
+# NetworkTable entries
+has_target_entry = cam_table.getBooleanTopic("hasTarget").subscribe(False)
+target_yaw_entry = cam_table.getDoubleTopic("targetYaw").subscribe(0.0)
+target_pitch_entry = cam_table.getDoubleTopic("targetPitch").subscribe(0.0)
+# PhotonVision reports 3D translation (x, y, z) in a float array. Index 0 is X (distance forward).
+target_pose_entry = cam_table.getDoubleArrayTopic("targetPose").subscribe([])
+
+# 2. Define Control Constants
+# The Scaling Factor corrects the 3D distance mathematically.
+# True black width / PhotonVision default width
+SCALE_FACTOR = 3.1355 / 6.5  
+
+# Proportional Gains (Kp) for the control loops
+STEER_K = 0.05  
+DRIVE_K = 0.2   
+DESIRED_DISTANCE_METERS = 0.5 # The target stopping distance from the tag
+
+print("Starting Navigation Loop...")
+
+try:
+    while True:
+        # Check if the camera sees an AprilTag
+        if has_target_entry.get():
+            
+            # Read the target's data
+            yaw = target_yaw_entry.get()
+            pose_array = target_pose_entry.get()
+            
+            if len(pose_array) >= 1:
+                # Extract the unscaled forward distance (X-axis translation)
+                raw_distance = pose_array[0]
+                
+                # Apply the linear scaling trick to get true distance
+                true_distance = raw_distance * SCALE_FACTOR
+                
+                # 3. Calculate the errors
+                # Error is the difference between where we are and where we want to be.
+                # For steering, our goal is a yaw of 0 degrees (pointing straight at the tag).
+                steer_error = 0.0 - yaw 
+                
+                # For driving, our goal is the DESIRED_DISTANCE_METERS.
+                distance_error = true_distance - DESIRED_DISTANCE_METERS
+                
+                # 4. Proportional Control Math
+                # We multiply the error by our constant gain (K) to get motor outputs.
+                # Large error = large motor speed. As error approaches 0, speed approaches 0.
+                steer_speed = steer_error * STEER_K
+                drive_speed = distance_error * DRIVE_K
+                
+                # Clamp the speeds to a safe range (e.g., -1.0 to 1.0) so motors don't max out instantly
+                steer_speed = max(-1.0, min(1.0, steer_speed))
+                drive_speed = max(-1.0, min(1.0, drive_speed))
+
+                print(f"Target Acquired. True Dist: {true_distance:.2f}m, Yaw: {yaw:.2f}deg")
+                print(f"Commanding -> Drive: {drive_speed:.2f}, Steer: {steer_speed:.2f}")
+                
+                # --> INSERT MOTOR CONTROLLER CODE HERE <--
+                # Example: drivetrain.arcade_drive(drive_speed, steer_speed)
+                
+            else:
+                print("Target detected, but pose data is unavailable.")
+        else:
+            print("No tags in view. Stopping motors.")
+            # --> INSERT MOTOR STOP CODE HERE <--
+            # Example: drivetrain.stop()
+            
+        time.sleep(0.05) # Run loop at 20Hz
+
+except KeyboardInterrupt:
+    print("Navigation stopped.")
